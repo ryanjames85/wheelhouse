@@ -171,7 +171,7 @@ describe('DockerProvider.executeAction', () => {
   describe('logs action', () => {
     it('opens a log channel and streams logs', async () => {
       const fakeChannel = { appendLine: vi.fn(), clear: vi.fn(), show: vi.fn() };
-      cli.getOrCreateLogChannel.mockReturnValue(fakeChannel);
+      vi.mocked(cli.getOrCreateLogChannel!).mockReturnValue(fakeChannel as never);
       await provider.executeAction('containers', 'web', 'logs');
       expect(cli.getOrCreateLogChannel).toHaveBeenCalledWith('web');
       expect(cli.streamLogs).toHaveBeenCalledWith('web', fakeChannel, false, '/test');
@@ -179,7 +179,7 @@ describe('DockerProvider.executeAction', () => {
 
     it('passes compose=true when tab is compose', async () => {
       const fakeChannel = { appendLine: vi.fn(), clear: vi.fn(), show: vi.fn() };
-      cli.getOrCreateLogChannel.mockReturnValue(fakeChannel);
+      vi.mocked(cli.getOrCreateLogChannel!).mockReturnValue(fakeChannel as never);
       await provider.executeAction('compose', 'db', 'logs');
       expect(cli.streamLogs).toHaveBeenCalledWith('db', fakeChannel, true, '/test');
     });

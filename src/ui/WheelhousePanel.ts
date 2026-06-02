@@ -7,6 +7,7 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
   public static readonly viewType = 'wheelhouse.main';
   private view?: vscode.WebviewView;
   private refreshTimer?: ReturnType<typeof setInterval>;
+  private daemonRecoveryTimer?: ReturnType<typeof setInterval>;
 
   constructor(
     private readonly registry: ProviderRegistry,
@@ -315,19 +316,6 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
 
     const tabs = this.registry.getVisibleTabs(profile);
     console.log('[Wheelhouse] sendFullState: tabs =', tabs.map(t => t.id));
-    const providers = this.registry.getAll().map((p) => ({
-      id: p.id,
-      name: p.name,
-      description: p.description,
-      version: p.version,
-      comingSoon: p.comingSoon,
-      status: p.status,
-      tabs: p.tabs,
-      daemonAvailable: 'isDaemonAvailable' in p ? (p as { isDaemonAvailable: boolean }).isDaemonAvailable : undefined,
-      composeFileFound: 'isComposeFileFound' in p ? (p as { isComposeFileFound: boolean }).isComposeFileFound : undefined,
-      composeFilePath: 'composeFilePath' in p ? (p as { composeFilePath: string | undefined }).composeFilePath : undefined,
-      activeContext: 'activeContext' in p ? (p as { activeContext: string }).activeContext : undefined,
-    }));
 
     const snippets = this.storage.getAllSnippets(profile.snippetScope);
 
@@ -350,6 +338,29 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
       })
     );
     console.log('[Wheelhouse] sendFullState: all tabs done, posting state');
+
+    // Build providers AFTER tabData so status reflects any mid-session daemon changes
+    const providers = this.registry.getAll().map((p) => ({
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      version: p.version,
+      comingSoon: p.comingSoon,
+      status: p.status,
+      tabs: p.tabs,
+      daemonAvailable: 'isDaemonAvailable' in p ? (p as { isDaemonAvailable: boolean }).isDaemonAvailable : undefined,
+      composeFileFound: 'isComposeFileFound' in p ? (p as { isComposeFileFound: boolean }).isComposeFileFound : undefined,
+      composeFilePath: 'composeFilePath' in p ? (p as { composeFilePath: string | undefined }).composeFilePath : undefined,
+      activeContext: 'activeContext' in p ? (p as { activeContext: string }).activeContext : undefined,
+    }));
+
+    // Start fast-polling when Docker is unreachable so recovery is detected quickly
+    const dockerMeta = providers.find(p => p.id === 'docker');
+    if (dockerMeta?.status === 'error') {
+      this.startDaemonRecovery();
+    } else {
+      this.stopDaemonRecovery();
+    }
 
     this.post({
       type: 'state',
@@ -389,6 +400,27 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
 
   dispose(): void {
     if (this.refreshTimer) clearInterval(this.refreshTimer);
+    this.stopDaemonRecovery();
+  }
+
+  private startDaemonRecovery(): void {
+    if (this.daemonRecoveryTimer) return;
+    this.daemonRecoveryTimer = setInterval(async () => {
+      const docker = this.registry.get('docker');
+      if (!docker) { this.stopDaemonRecovery(); return; }
+      const available = await docker.isAvailable();
+      if (available) {
+        this.stopDaemonRecovery();
+        await this.sendFullState();
+      }
+    }, 2000);
+  }
+
+  private stopDaemonRecovery(): void {
+    if (this.daemonRecoveryTimer) {
+      clearInterval(this.daemonRecoveryTimer);
+      this.daemonRecoveryTimer = undefined;
+    }
   }
 
   private getNonce(): string {
@@ -713,6 +745,17 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
       .onboarding-dismiss { margin-top: 8px; font-size: 10px; color: var(--vscode-textLink-foreground); cursor: pointer; display: inline-block; }
       .onboarding-dismiss:hover { text-decoration: underline; }
 
+      /* ── onboarding moment 3 inline callout ── */
+      .ob3-callout { display: flex; align-items: flex-start; gap: 7px; padding: 6px 10px; background: var(--wh-bg-danger); border-top: 1px solid var(--wh-border-soft); font-size: 10px; color: var(--wh-text-danger); }
+      .ob3-callout svg { width: 12px; height: 12px; flex-shrink: 0; margin-top: 1px; }
+      .ob3-callout-body { flex: 1; line-height: 1.5; }
+      .ob3-dismiss { font-size: 10px; color: var(--vscode-textLink-foreground); cursor: pointer; flex-shrink: 0; align-self: flex-end; white-space: nowrap; }
+      .ob3-dismiss:hover { text-decoration: underline; }
+
+      /* ── pending action state ── */
+      .svc-row.pending { opacity: 0.6; pointer-events: none; }
+      .pending-chip { font-size: 9px; font-weight: 600; padding: 2px 6px; border-radius: 3px; background: var(--wh-bg-info); color: var(--wh-text-info); flex-shrink: 0; animation: pulse 1.2s ease-in-out infinite; }
+
       /* ── images pull row ── */
       .pull-row { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border); background: var(--vscode-sideBarSectionHeader-background); flex-shrink: 0; }
       .pull-input { flex: 1; background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border); color: var(--vscode-input-foreground); border-radius: 3px; padding: 4px 7px; font-size: 11px; font-family: var(--vscode-editor-font-family, monospace); min-width: 0; }
@@ -750,6 +793,7 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
       let cmdFilter = '';
       const expandedResources = new Set();
       const expandedSnippets = new Set();
+      const pendingActions = new Map(); // resourceId → { tabId, actionId }
 
       // settings state
       let settingsOpen = false;
@@ -801,7 +845,10 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
         } else if (msg.type === 'tabData') {
           if (state) {
             const idx = state.tabData.findIndex(t => t.tabId === msg.payload.tabId);
-            if (idx >= 0) state.tabData[idx] = msg.payload;
+            if (idx >= 0) {
+              (msg.payload.resources || []).forEach(r => pendingActions.delete(r.id));
+              state.tabData[idx] = msg.payload;
+            }
             if (!settingsOpen) render();
           }
         } else if (msg.type === 'pullError') {
@@ -815,9 +862,15 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
       // ── render ─────────────────────────────────────────────────────────────
       function render() {
         if (!state) return;
+        const activeContent = document.querySelector('.tab-content.active');
+        const savedScroll = activeContent ? activeContent.scrollTop : 0;
         try {
           document.getElementById('app').innerHTML = settingsOpen ? renderSettings() : renderDeck();
           restoreExpanded();
+          if (savedScroll > 0) {
+            const newActiveContent = document.querySelector('.tab-content.active');
+            if (newActiveContent) newActiveContent.scrollTop = savedScroll;
+          }
         } catch(e) {
           console.error('[Wheelhouse webview] render() threw:', e);
           document.getElementById('app').innerHTML = '<div style="padding:16px;color:red;font-size:11px;">Render error: ' + e.message + '</div>';
@@ -1213,6 +1266,13 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
         const pullRow = data.tabId === 'images' ? renderPullRow() : '';
 
         if (!data.resources || !data.resources.length) {
+          if (data.sectionLabel?.startsWith('Docker daemon')) {
+            return pullRow + sectionHeader + \`<div class="helper" style="margin:8px;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              <div class="helper-body"><strong>Docker not reachable</strong>Start Docker Desktop or your Docker daemon to manage \${data.tabId}.
+              <span class="helper-link" onclick="post('openLink',{url:'https://docs.docker.com/get-started/'})">How to start Docker →</span></div>
+            </div>\`;
+          }
           if (data.tabId === 'compose' && !data.sectionLabel?.includes('services')) {
             return pullRow + sectionHeader + \`<div class="helper" style="margin:8px;">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
@@ -1234,12 +1294,19 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
           }
         }
 
+        const ob = state.onboarding || {};
+        let shownMoment3 = false;
         const resources = data.resources.map(r => {
+          let showCallout = false;
+          if (data.tabId === 'compose' && r.status === 'unhealthy' && !ob.moment3 && !shownMoment3) {
+            showCallout = true;
+            shownMoment3 = true;
+          }
           if (data.tabId === 'images') {
             const isUsed = usedImageNames.has(r.name) || usedImageNames.size === 0;
-            return renderResource(r, data.tabId, !isUsed);
+            return renderResource(r, data.tabId, !isUsed, showCallout);
           }
-          return renderResource(r, data.tabId, false);
+          return renderResource(r, data.tabId, false, showCallout);
         }).join('');
         return pullRow + sectionHeader + resources;
       }
@@ -1270,16 +1337,19 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
         return \`<div class="sec-hdr"><span class="sec-txt">\${sectionLabel}</span></div>\`;
       }
 
-      function renderResource(resource, tabId, unused) {
+      function renderResource(resource, tabId, unused, showCallout) {
         const nameClass = ['stopped','exited','orphaned','unknown'].includes(resource.status) ? 'dim' : '';
         const unusedClass = unused ? ' img-unused' : '';
+        const pending = pendingActions.get(resource.id);
         const actionTitles = { restart: \`Restart \${resource.name}\`, stop: \`Stop \${resource.name}\`, start: \`Start \${resource.name}\`, shell: \`Open shell in \${resource.name}\`, logs: \`Tail logs for \${resource.name}\`, remove: \`Remove \${resource.name}\`, pull: \`Pull latest \${resource.name}\`, inspect: \`Inspect \${resource.name}\` };
         const actions = (resource.actions || []).map(a => \`
           <button class="ab \${a.dangerous ? 'danger' : ''}"
             onclick="event.stopPropagation(); execAction('\${tabId}','\${resource.id}','\${a.id}')"
             title="\${actionTitles[a.id] || a.label}">\${icon(a.icon)}</button>
         \`).join('');
-        const divider = actions ? '<span class="divr"></span>' : '';
+        const rightSide = pending
+          ? \`<span class="pending-chip">\${pending.actionId}…</span>\`
+          : \`\${statusChip(resource.status)}\${actions ? '<span class="divr"></span>' : ''}<div class="acts">\${actions}</div>\`;
         const children = (resource.children || []).map(c => \`
           <div class="child-row">
             <span class="c-lbl">\${c.label}</span>
@@ -1288,15 +1358,16 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
         \`).join('');
         const unusedNote = unused ? \`<div class="img-unused-note">\${resource.name} is not used by any container — safe to remove</div>\` : '';
         const childrenDiv = children ? \`<div class="children" id="rc-\${resource.id}">\${children}\${unusedNote}</div>\` : (unusedNote ? \`<div class="children open" id="rc-\${resource.id}">\${unusedNote}</div>\` : '');
+        const warnSvg = \`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>\`;
+        const callout = showCallout ? \`<div class="ob3-callout">\${warnSvg}<div class="ob3-callout-body">Expand to see what's wrong, or click Restart.</div><span class="ob3-dismiss" onclick="maybeDismissMoment3('\${resource.id}')">Got it →</span></div>\` : '';
         return \`
           <div class="svc\${unusedClass}">
-            <div class="svc-row" onclick="toggleResource('\${resource.id}')">
+            <div class="svc-row\${pending ? ' pending' : ''}" onclick="toggleResource('\${resource.id}')">
               <span class="chev" id="chev-\${resource.id}"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="3 2 7 5 3 8"/></svg></span>
               <span class="svc-name \${nameClass}">\${resource.name}</span>
-              \${statusChip(resource.status)}
-              \${divider}
-              <div class="acts">\${actions}</div>
+              \${rightSide}
             </div>
+            \${callout}
             \${childrenDiv}
           </div>
         \`;
@@ -1787,6 +1858,17 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
         render();
       }
 
+      function maybeDismissMoment3(resourceId) {
+        if (state?.onboarding?.moment3) return;
+        const allResources = (state?.tabData || []).flatMap(td => td.resources || []);
+        if (allResources.find(r => r.id === resourceId)?.status === 'unhealthy') {
+          if (!state.onboarding) state.onboarding = {};
+          state.onboarding.moment3 = true;
+          post('markOnboarding', { moment: 'moment3' });
+          render();
+        }
+      }
+
       function toggleResource(id) {
         const children = document.getElementById('rc-' + id);
         const chev = document.getElementById('chev-' + id);
@@ -1794,6 +1876,7 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
         if (chev) chev.classList.toggle('open');
         if (expandedResources.has(id)) expandedResources.delete(id);
         else expandedResources.add(id);
+        maybeDismissMoment3(id);
       }
 
       function toggleSnippet(id) {
@@ -1805,6 +1888,9 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
       }
 
       function execAction(tabId, resourceId, actionId) {
+        if (actionId === 'restart') maybeDismissMoment3(resourceId);
+        pendingActions.set(resourceId, { tabId, actionId });
+        render();
         post('action', { tabId, resourceId, actionId });
       }
 

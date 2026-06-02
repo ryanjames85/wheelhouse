@@ -92,10 +92,9 @@ export class DockerProvider extends BaseProvider {
   async getTabData(tabId: string): Promise<ProviderTabData> {
     if (tabId === 'compose') return this.getComposeData(tabId);
 
-    // All other tabs require a live daemon
-    if (!this.daemonAvailable) {
-      this.daemonAvailable = await this.cli?.isAvailable() ?? false;
-    }
+    // All other tabs require a live daemon — re-check on every call so status reflects reality
+    this.daemonAvailable = await this.cli?.isAvailable() ?? false;
+    this.status = this.daemonAvailable ? 'connected' : 'error';
     if (!this.daemonAvailable) {
       return { tabId, resources: [], sectionLabel: 'Docker daemon not reachable' };
     }
@@ -175,6 +174,7 @@ export class DockerProvider extends BaseProvider {
 
     // Try to get live state from daemon — refresh availability each call
     this.daemonAvailable = await this.cli.isAvailable();
+    this.status = this.daemonAvailable ? 'connected' : 'error';
     const liveServices = this.daemonAvailable
       ? await this.cli.getComposeServices(composeFile, this.composeDir)
       : [];
