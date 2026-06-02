@@ -1,0 +1,125 @@
+{
+  "name": "wheelhouse",
+  "displayName": "Wheelhouse — Infrastructure Command Deck",
+  "description": "Everything you'd open a terminal for. Without opening a terminal. Docker, Kubernetes, and more — in one command deck.",
+  "version": "0.1.0",
+  "publisher": "ryanjames85",
+  "icon": "media/wheelhouse-logo-icon.svg",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ryanjames85/wheelhouse"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "docker",
+    "docker-compose",
+    "compose",
+    "containers",
+    "kubernetes",
+    "k8s",
+    "devops",
+    "infrastructure",
+    "local dev",
+    "wheelhouse"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "wheelhouse",
+          "title": "Wheelhouse",
+          "icon": "media/wheelhouse-logo-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "wheelhouse": [
+        {
+          "id": "wheelhouse.main",
+          "name": "Wheelhouse",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "wheelhouse.openSettings",
+        "title": "Wheelhouse: Open Settings"
+      },
+      {
+        "command": "wheelhouse.switchProfile",
+        "title": "Wheelhouse: Switch Profile"
+      },
+      {
+        "command": "wheelhouse.refresh",
+        "title": "Wheelhouse: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "wheelhouse.exportSettings",
+        "title": "Wheelhouse: Export Settings"
+      },
+      {
+        "command": "wheelhouse.importSettings",
+        "title": "Wheelhouse: Import Settings"
+      },
+      {
+        "command": "wheelhouse.popout",
+        "title": "Wheelhouse: Open Full View",
+        "icon": "$(arrow-up-right)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "wheelhouse.popout",
+          "when": "view == wheelhouse.main",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Wheelhouse",
+      "properties": {
+        "wheelhouse.activeProfile": {
+          "type": "string",
+          "default": "default",
+          "description": "The currently active profile name."
+        },
+        "wheelhouse.showActivityBarBadge": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show status badge on the Wheelhouse activity bar icon."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vitest/coverage-v8": "^4.1.7",
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.7"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  }
+}
