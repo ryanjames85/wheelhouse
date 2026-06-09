@@ -1,3 +1,14 @@
+/**
+ * DockerCLI.ts
+ *
+ * Thin wrapper around the docker CLI binary — no Docker SDK, no Docker Desktop dependency.
+ *
+ * All operations shell out via child_process. Works with any Docker-compatible daemon
+ * (Docker Desktop, Colima, Podman, Rancher Desktop) as long as the docker binary is on PATH.
+ *
+ * Streaming operations (logs, shell) use spawn and write to a VS Code OutputChannel or terminal.
+ * One-shot operations (ps, images, etc.) use exec and parse JSON output.
+ */
 import { spawn } from 'child_process';
 import * as net from 'net';
 import * as vscode from 'vscode';
@@ -65,6 +76,42 @@ export class DockerCLI {
         else resolve(stdout.trim());
       });
       proc.on('error', (err: Error) => reject(err));
+    });
+  }
+
+  // Long-running commands (compose up/down/restart) — streams output live to a channel so the
+  // user sees progress as it happens. The header and footer make clear this is Docker output.
+  private runToChannel(args: string[], cwd?: string): Promise<void> {
+    const channel = this.getOrCreateLogChannel('docker');
+    channel.clear();
+    channel.show(true);
+    channel.appendLine(`▶ ${this.dockerBin} ${args.join(' ')}`);
+    channel.appendLine('─'.repeat(60));
+
+    return new Promise((resolve, reject) => {
+      const proc = spawn(this.dockerBin, args, {
+        cwd: cwd ?? this.workDir,
+        shell: false,
+        windowsHide: true,
+      });
+      proc.stdout.on('data', (d: Buffer) => channel.append(d.toString()));
+      proc.stderr.on('data', (d: Buffer) => channel.append(d.toString()));
+      proc.on('close', (code: number | null) => {
+        channel.appendLine('');
+        if (code !== 0) {
+          channel.appendLine(`─`.repeat(60));
+          channel.appendLine(`✗ Docker exited with code ${code} — the error above is from Docker, not Wheelhouse.`);
+          reject(new Error(`docker ${args[0]} exited with code ${code}`));
+        } else {
+          channel.appendLine(`─`.repeat(60));
+          channel.appendLine(`✓ Done`);
+          resolve();
+        }
+      });
+      proc.on('error', (err: Error) => {
+        channel.appendLine(`\n✗ Could not start Docker: ${err.message}`);
+        reject(err);
+      });
     });
   }
 
@@ -182,13 +229,13 @@ export class DockerCLI {
 
   async composeUp(cwd: string, service?: string): Promise<void> {
     const args = service ? ['compose', 'up', '-d', service] : ['compose', 'up', '-d'];
-    await this.run(args, cwd);
+    await this.runToChannel(args, cwd);
   }
 
-  async composeDown(cwd: string): Promise<void> { await this.run(['compose', 'down'], cwd); }
-  async composeRestart(cwd: string, service: string): Promise<void> { await this.run(['compose', 'restart', service], cwd); }
-  async composeRestartAll(cwd: string): Promise<void> { await this.run(['compose', 'restart'], cwd); }
-  async composeStop(cwd: string, service: string): Promise<void> { await this.run(['compose', 'stop', service], cwd); }
+  async composeDown(cwd: string): Promise<void> { await this.runToChannel(['compose', 'down'], cwd); }
+  async composeRestart(cwd: string, service: string): Promise<void> { await this.runToChannel(['compose', 'restart', service], cwd); }
+  async composeRestartAll(cwd: string): Promise<void> { await this.runToChannel(['compose', 'restart'], cwd); }
+  async composeStop(cwd: string, service: string): Promise<void> { await this.runToChannel(['compose', 'stop', service], cwd); }
 
   streamLogs(nameOrId: string, channel: vscode.OutputChannel, compose = false, cwd?: string): void {
     channel.clear();
@@ -211,7 +258,7 @@ export class DockerCLI {
 
   openShell(nameOrId: string): void {
     const terminal = vscode.window.createTerminal(`Shell: ${nameOrId}`);
-    terminal.sendText(`${this.dockerBin} exec -it ${nameOrId} sh -c "command -v bash && exec bash || exec sh"`);
+    terminal.sendText(`${this.dockerBin} exec -it "${nameOrId}" sh -c "command -v bash && exec bash || exec sh"`);
     terminal.show();
   }
 
@@ -228,7 +275,9 @@ export class DockerCLI {
 
     const proc = spawn(this.dockerBin, args, { cwd, shell: false, windowsHide: true });
     let buf = '';
+    let disposed = false;
     const flush = (data: Buffer) => {
+      if (disposed) return;
       buf += data.toString();
       const lines = buf.split('\n');
       buf = lines.pop() ?? '';
@@ -236,8 +285,8 @@ export class DockerCLI {
     };
     proc.stdout.on('data', flush);
     proc.stderr.on('data', flush);
-    proc.on('close', () => { if (buf) onLine(buf); onEnd(); });
-    return () => { try { proc.kill(); } catch { /* already dead */ } };
+    proc.on('close', () => { if (!disposed && buf) onLine(buf); if (!disposed) onEnd(); });
+    return () => { disposed = true; try { proc.kill(); } catch { /* already dead */ } };
   }
 
   async isPortInUse(port: number): Promise<boolean> {

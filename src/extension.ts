@@ -1,3 +1,14 @@
+/**
+ * extension.ts
+ *
+ * VS Code extension entry point — activates Wheelhouse and wires everything together.
+ *
+ * Responsibilities:
+ *   - Instantiates StorageManager, ProviderRegistry, and WheelhousePanel.
+ *   - Calls connectEnabled() on the active profile at startup and on workspace folder changes.
+ *   - Registers all wheelhouse.* commands (refresh, popout, openSettings, switchProfile, export/importSettings).
+ *   - Disposes all resources on deactivation.
+ */
 import * as vscode from 'vscode';
 import { ProviderRegistry } from './core/ProviderRegistry';
 import { StorageManager } from './storage/StorageManager';
@@ -70,6 +81,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         panel?.refresh();
         vscode.window.showInformationMessage('Wheelhouse: Settings imported successfully.');
       }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+      await registry!.connectEnabled(storage!.getActiveProfile());
+      panel?.refresh();
     })
   );
 

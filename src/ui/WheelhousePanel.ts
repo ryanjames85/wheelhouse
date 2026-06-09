@@ -1,3 +1,17 @@
+/**
+ * WheelhousePanel.ts
+ *
+ * Webview panel — renders the entire Wheelhouse sidebar UI and handles all message traffic.
+ *
+ * The UI is inline HTML/CSS/JS (no framework, no bundler). All rendering happens in the webview;
+ * the extension host sends state over postMessage and receives action/refresh/settings messages back.
+ *
+ * Key responsibilities:
+ *   - sendFullState(): polls all visible tabs and posts a complete state snapshot to the webview.
+ *   - startRefresh() / stopRefresh(): interval-based polling at the profile's refresh rate.
+ *   - startDaemonRecovery(): 2s poll when Docker is unreachable; calls sendFullState() on recovery.
+ *   - handleMessage(): routes inbound webview messages to provider actions, settings saves, etc.
+ */
 import * as vscode from 'vscode';
 import { ProviderRegistry } from '../core/ProviderRegistry';
 import { StorageManager } from '../storage/StorageManager';
@@ -280,8 +294,10 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
         const { action } = msg.payload as { action: 'start' | 'stop' | 'restart' };
         let cmd: string;
         if (process.platform === 'win32') {
-          const startCmd = 'Start-Process "Docker Desktop"';
-          const stopCmd = 'Stop-Process -Name "Docker Desktop" -ErrorAction SilentlyContinue';
+          // Docker Desktop installs to Program Files — "Docker Desktop" is a window title, not an exe name
+          const exe = '"$env:ProgramFiles\\Docker\\Docker\\Docker Desktop.exe"';
+          const startCmd = `Start-Process ${exe}`;
+          const stopCmd = `Stop-Process -Name "Docker Desktop" -Force -ErrorAction SilentlyContinue`;
           cmd = action === 'start' ? startCmd
               : action === 'stop'  ? stopCmd
               : `${stopCmd}; Start-Sleep 3; ${startCmd}`;
@@ -323,7 +339,7 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
       tabs.map(async (tab) => {
         console.log('[Wheelhouse] sendFullState: fetching tab', tab.id);
         const provider = this.registry.get(tab.providerId);
-        if (!provider || provider.status !== 'connected') {
+        if (!provider || provider.status === 'disconnected') {
           console.log('[Wheelhouse] sendFullState: tab', tab.id, 'provider not connected, status =', provider?.status);
           return { tabId: tab.id, resources: [], badge: 0 };
         }
@@ -366,6 +382,7 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
       type: 'state',
       payload: {
         profile, config, tabs, tabData, providers, snippets,
+        platform: process.platform,
         dismissedHints: this.storage.getDismissedHints(),
         onboarding: this.storage.getOnboardingFlags(),
       },
@@ -1180,11 +1197,18 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
       }
 
       function renderHelperCard(type) {
-        if (type === 'docker') return \`<div class="helper">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-          <div class="helper-body"><strong>Docker not running</strong>Start Docker Desktop or your Docker daemon to manage containers.
-          <span class="helper-link" onclick="post('openLink',{url:'https://docs.docker.com/get-started/'})">How to start Docker →</span></div>
-        </div>\`;
+        if (type === 'docker') {
+          const platform = state.platform;
+          const startHint = platform === 'win32' ? 'Start Docker Desktop from the Start Menu or system tray.'
+            : platform === 'darwin' ? 'Start Docker Desktop from Applications or the menu bar.'
+            : 'Start the Docker daemon: sudo systemctl start docker';
+          return \`<div class="helper">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <div class="helper-body"><strong>Docker not running</strong>\${startHint}
+            \${platform !== 'linux' ? \`<span class="helper-link" onclick="post('daemonAction',{action:'start'})">Start Docker →</span>\` : \`<span class="helper-link" onclick="post('openLink',{url:'https://docs.docker.com/engine/install/'})">Install guide →</span>\`}
+            </div>
+          </div>\`;
+        }
         return '';
       }
 
@@ -1267,10 +1291,16 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
 
         if (!data.resources || !data.resources.length) {
           if (data.sectionLabel?.startsWith('Docker daemon')) {
+            const platform = state.platform;
+            const startHint = platform === 'win32' ? 'Start Docker Desktop from the Start Menu or system tray.'
+              : platform === 'darwin' ? 'Start Docker Desktop from Applications or the menu bar.'
+              : 'Start the Docker daemon: sudo systemctl start docker';
+            const startLink = platform !== 'linux'
+              ? \`<span class="helper-link" onclick="post('daemonAction',{action:'start'})">Start Docker →</span>\`
+              : \`<span class="helper-link" onclick="post('openLink',{url:'https://docs.docker.com/engine/install/'})">Install guide →</span>\`;
             return pullRow + sectionHeader + \`<div class="helper" style="margin:8px;">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-              <div class="helper-body"><strong>Docker not reachable</strong>Start Docker Desktop or your Docker daemon to manage \${data.tabId}.
-              <span class="helper-link" onclick="post('openLink',{url:'https://docs.docker.com/get-started/'})">How to start Docker →</span></div>
+              <div class="helper-body"><strong>Docker not reachable</strong>\${startHint}\${startLink}</div>
             </div>\`;
           }
           if (data.tabId === 'compose' && !data.sectionLabel?.includes('services')) {
@@ -1775,17 +1805,18 @@ export class WheelhousePanel implements vscode.WebviewViewProvider {
         const filter = cmdFilter.toLowerCase();
         let html = \`<input class="cmd-search" placeholder="Search commands…" oninput="cmdFilter=this.value;render()" value="\${cmdFilter.replace(/"/g,'&quot;')}">\`;
 
+        let cmdIdx = 0;
         for (const g of groups) {
           const rows = g.cmds.filter(c =>
             !filter || c.label.toLowerCase().includes(filter) || c.cmd.toLowerCase().includes(filter)
           );
-          if (!rows.length) continue;
+          if (!rows.length) { cmdIdx += g.cmds.length; continue; }
           html += \`<div class="cmd-group-lbl">\${g.label}</div>\`;
           for (const c of rows) {
             const cmdDisplay = c.svc
               ? c.cmd.replace(c.svc, \`\${hlSvc(c.svc)}\`)
               : c.cmd;
-            const copyId = 'cp-' + c.cmd.replace(/[^a-z0-9]/gi,'');
+            const copyId = \`cp-\${cmdIdx++}\`;
             html += \`<div class="cmd-row">
               <span class="cmd-label">\${c.label}</span>
               <span class="cmd-code">\${cmdDisplay}</span>

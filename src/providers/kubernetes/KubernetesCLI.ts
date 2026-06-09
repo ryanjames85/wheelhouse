@@ -1,3 +1,11 @@
+/**
+ * KubernetesCLI.ts
+ *
+ * Kubernetes CLI wrapper stub — will shell out to kubectl for all cluster operations.
+ *
+ * Not yet implemented. Placeholder so the module graph is complete.
+ * Follow the DockerCLI pattern: exec for one-shot queries, spawn for streaming (logs, shell).
+ */
 import { spawn } from 'child_process';
 import * as vscode from 'vscode';
 

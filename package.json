@@ -3,8 +3,9 @@
   "displayName": "Wheelhouse — Infrastructure Command Deck",
   "description": "Everything you'd open a terminal for. Without opening a terminal. Docker, Kubernetes, and more — in one command deck.",
   "version": "0.1.0",
-  "publisher": "ryanjames85",
-  "icon": "media/wheelhouse-logo-icon.svg",
+  "publisher": "RyanConnolly",
+  "icon": "media/wheelhouse-logo-icon.png",
+  "license": "PolyForm-Shield-1.0.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/ryanjames85/wheelhouse"

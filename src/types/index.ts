@@ -1,3 +1,12 @@
+/**
+ * types/index.ts
+ *
+ * Shared TypeScript types for the entire extension.
+ *
+ * Covers: provider status and config, tab definitions, resources and their actions,
+ * profiles, snippets, webview message shapes, and the top-level WheelhouseConfig.
+ * Everything is exported from here — no other types file.
+ */
 export type ProviderStatus = 'connected' | 'disconnected' | 'error' | 'coming_soon';
 export type ResourceStatus = 'running' | 'stopped' | 'restarting' | 'unhealthy' | 'unknown' | 'exited' | 'orphaned' | 'in_use';
 export type SnippetScope = 'workspace' | 'global';

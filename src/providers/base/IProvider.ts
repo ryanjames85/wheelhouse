@@ -1,3 +1,12 @@
+/**
+ * IProvider.ts
+ *
+ * Provider interface and BaseProvider base class.
+ *
+ * IProvider is the contract every provider must implement: connect, disconnect, getTabData, executeAction.
+ * BaseProvider supplies the shared fields (id, name, status, config) and a no-op default for executeAction.
+ * Adding a new provider means extending BaseProvider and registering it in ProviderRegistry.
+ */
 import { TabDefinition, ProviderTabData, ProviderStatus, ProviderConfig } from '../../types';
 
 export interface IProvider {

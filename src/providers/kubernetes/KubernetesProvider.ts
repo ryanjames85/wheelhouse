@@ -1,3 +1,14 @@
+/**
+ * KubernetesProvider.ts
+ *
+ * Kubernetes provider stub — declares the K8s tab set and returns empty data for all tabs.
+ *
+ * Tabs declared: pods, deployments, services, namespaces.
+ * comingSoon = true until the kubectl integration is implemented.
+ *
+ * To implement: add KubectlCLI.ts, wire up getTabData() per tab, add executeAction()
+ * for pod shell / logs / scale / restart, then set comingSoon = false.
+ */
 import { BaseProvider } from '../base/IProvider';
 import { TabDefinition, ProviderTabData, Resource, ResourceStatus, ResourceAction } from '../../types';
 import { KubernetesCLI } from './KubernetesCLI';

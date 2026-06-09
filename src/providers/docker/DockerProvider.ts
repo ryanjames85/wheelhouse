@@ -1,3 +1,15 @@
+/**
+ * DockerProvider.ts
+ *
+ * Docker provider — serves tab data for Compose, Containers, Images, Volumes, and Networks.
+ *
+ * The Compose tab is file-based: it parses docker-compose.yml with js-yaml and overlays live state
+ * from the daemon when available. It works without a running daemon (shows services as stopped).
+ * All other tabs require a live daemon and set status = 'error' when the daemon is unreachable.
+ *
+ * Compose file discovery: scans all open workspace folders for docker-compose.yml / compose.yml
+ * variants on every getComposeData() call, so it picks up the right project automatically.
+ */
 import * as path from 'path';
 import * as fs from 'fs';
 import * as vscode from 'vscode';
@@ -55,7 +67,7 @@ export class DockerProvider extends BaseProvider {
 
   async connect(): Promise<void> {
     const bin = this.config.settings['dockerBin'] || 'docker';
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+    const workspaceRoot = this.findWorkspaceWithCompose() ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
     this.composeDir = this.findComposeDir(workspaceRoot) ?? workspaceRoot;
     this.cli = new DockerCLI(bin, this.composeDir);
     this.daemonAvailable = await this.cli.isAvailable();
@@ -70,6 +82,13 @@ export class DockerProvider extends BaseProvider {
 
   async isAvailable(): Promise<boolean> {
     return this.cli?.isAvailable() ?? false;
+  }
+
+  private findWorkspaceWithCompose(): string | undefined {
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      if (this.findComposeDir(folder.uri.fsPath)) return folder.uri.fsPath;
+    }
+    return undefined;
   }
 
   private findComposeDir(root: string): string | undefined {
@@ -146,7 +165,7 @@ export class DockerProvider extends BaseProvider {
   }
 
   private async getComposeData(tabId: string): Promise<ProviderTabData> {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.findWorkspaceWithCompose() ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (workspaceRoot) {
       const found = this.findComposeDir(workspaceRoot);
       if (found) this.composeDir = found;
@@ -173,8 +192,9 @@ export class DockerProvider extends BaseProvider {
     }
 
     // Try to get live state from daemon — refresh availability each call
+    // Do NOT update this.status here; compose is file-based and must work regardless of daemon state.
+    // Daemon-dependent tabs (containers, images, etc.) own the status field.
     this.daemonAvailable = await this.cli.isAvailable();
-    this.status = this.daemonAvailable ? 'connected' : 'error';
     const liveServices = this.daemonAvailable
       ? await this.cli.getComposeServices(composeFile, this.composeDir)
       : [];

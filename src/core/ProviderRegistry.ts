@@ -1,3 +1,12 @@
+/**
+ * ProviderRegistry.ts
+ *
+ * Owns the lifecycle of all registered providers and resolves tab visibility for the active profile.
+ *
+ * Providers are registered once at construction (Docker, Kubernetes).
+ * connectEnabled() connects providers that are enabled in the given profile and disconnects the rest.
+ * getVisibleTabs() returns the ordered tab list for the current profile, filtered to connected providers.
+ */
 import { IProvider } from '../providers/base/IProvider';
 import { DockerProvider } from '../providers/docker/DockerProvider';
 import { KubernetesProvider } from '../providers/kubernetes/KubernetesProvider';

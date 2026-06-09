@@ -1,3 +1,14 @@
+/**
+ * StorageManager.ts
+ *
+ * All persistence for Wheelhouse — profiles, snippets, and settings.
+ *
+ * Storage locations:
+ *   - Profiles, global snippets, settings → VS Code globalState (follows the user across machines with Settings Sync).
+ *   - Workspace snippets → .wheelhouse/snippets.json in the workspace root (committed to git, shared with the team).
+ *
+ * exportConfig() / importConfig() combine both locations into a single portable JSON.
+ */
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';

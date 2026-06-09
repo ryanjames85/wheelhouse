@@ -1,3 +1,12 @@
+/**
+ * PopoutPanel.ts
+ *
+ * Popout panel — opens Wheelhouse in a standalone editor column instead of the sidebar.
+ *
+ * Shares the same ProviderRegistry and StorageManager as the sidebar panel.
+ * Only one popout can be open at a time (singleton via PopoutPanel.open()).
+ * Useful when you want the panel detached and resizable alongside your editor.
+ */
 import * as vscode from 'vscode';
 import { ProviderRegistry } from '../core/ProviderRegistry';
 import { StorageManager } from '../storage/StorageManager';
